@@ -1,72 +1,9 @@
-async function checkAuth() {
-    try {
-        const response = await fetch('/auth-status');
-        const data = await response.json();
-
-        if (data.authenticated) {
-            showMainContent();
-            loadVideos();
-        } else {
-            showLoginOverlay();
-        }
-    } catch (error) {
-        console.error('Auth check failed:', error);
-        showLoginOverlay();
-    }
-}
-
-function showMainContent() {
-    document.getElementById('loginOverlay').classList.add('hidden');
-    document.getElementById('mainContent').classList.remove('hidden');
-}
-
-function showLoginOverlay() {
-    document.getElementById('loginOverlay').classList.remove('hidden');
-    document.getElementById('mainContent').classList.add('hidden');
-}
-
-async function login() {
-    const registerNumber = document.getElementById('regNo').value.trim();
-    const password = document.getElementById('wifiPass').value.trim();
-    const errorEl = document.getElementById('loginError');
-
-    if (!/^71402\d{7}$/.test(registerNumber)) {
-        errorEl.innerText = 'Register number must start with 71402 and be 12 digits.';
-        return;
-    }
-
-    try {
-        const response = await fetch('/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ registerNumber, password })
-        });
-
-        if (response.ok) {
-            showMainContent();
-            loadVideos();
-        } else {
-            const data = await response.json();
-            errorEl.innerText = data.message || 'Invalid register number or password.';
-        }
-    } catch (error) {
-        console.error('Login error:', error);
-        errorEl.innerText = 'Server error. Try again later.';
-    }
-}
-
-async function logout() {
-    try {
-        await fetch('/logout', { method: 'POST' });
-        location.reload();
-    } catch (error) {
-        console.error('Logout error:', error);
-    }
-}
-
-async function uploadVideo() {
-    const input = document.getElementById('videoInput');
+async function uploadFile() {
+    const input = document.getElementById('fileInput');
     const status = document.getElementById('status');
+    const progressContainer = document.getElementById('progressContainer');
+    const progressBar = document.getElementById('progressBar');
+    const percentage = document.getElementById('percentage');
 
     if (!input.files[0]) {
         status.innerText = 'Please select a file first.';
@@ -74,60 +11,109 @@ async function uploadVideo() {
     }
 
     const formData = new FormData();
-    formData.append('video', input.files[0]);
+    formData.append('file', input.files[0]);
 
     status.innerText = 'Uploading...';
+    progressContainer.style.display = 'block';
+    progressBar.value = 0;
+    percentage.innerText = '0%';
 
+    const xhr = new XMLHttpRequest();
+
+    xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable) {
+            const percentComplete = Math.round((event.loaded / event.total) * 100);
+            progressBar.value = percentComplete;
+            percentage.innerText = `${percentComplete}%`;
+        }
+    });
+
+    xhr.onload = function () {
+        if (xhr.status === 200) {
+            status.innerText = 'Uploaded successfully!';
+            loadFiles();
+            setTimeout(() => {
+                progressContainer.style.display = 'none';
+            }, 2000);
+        } else {
+            console.error('Upload failed with status:', xhr.status);
+            status.innerText = `Upload failed (${xhr.status}).`;
+        }
+    };
+
+    xhr.onerror = function () {
+        console.error('Error during upload.');
+        status.innerText = 'Error uploading file.';
+    };
+
+    xhr.open('POST', '/upload');
+    xhr.send(formData);
+}
+
+async function loadFiles() {
     try {
-        const response = await fetch('/upload', {
-            method: 'POST',
-            body: formData
+        const response = await fetch('/files');
+        const data = await response.json();
+        console.log('Fetched files:', data);
+
+        const sections = {
+            video: document.getElementById('videoList'),
+            audio: document.getElementById('audioList'),
+            images: document.getElementById('imagesList'),
+            others: document.getElementById('othersList')
+        };
+
+        // Clear all lists
+        Object.values(sections).forEach(list => {
+            if (list) list.innerHTML = '';
         });
 
-        if (response.ok) {
-            status.innerText = 'Uploaded successfully!';
-            loadVideos();
-        } else if (response.status === 401) {
-            location.reload(); // Redirect to login if session expired
-        } else {
-            status.innerText = 'Upload failed.';
+        if (Array.isArray(data)) {
+            // Fallback for old simple list format
+            console.warn('Received old array format from server. Migration might be pending.');
+            const othersList = sections.others;
+            if (othersList) {
+                data.forEach(file => {
+                    appendFileToList(othersList, file);
+                });
+            }
+        } else if (typeof data === 'object' && data !== null) {
+            // New categorized format
+            for (const [category, files] of Object.entries(data)) {
+                const listElement = sections[category];
+                if (!listElement) continue;
+
+                if (files.length === 0) {
+                    const li = document.createElement('li');
+                    li.style.color = '#999';
+                    li.style.padding = '10px';
+                    li.innerText = 'No files available.';
+                    listElement.appendChild(li);
+                    continue;
+                }
+
+                files.forEach(file => {
+                    appendFileToList(listElement, file);
+                });
+            }
         }
     } catch (error) {
-        console.error('Error:', error);
-        status.innerText = 'Error uploading video.';
+        console.error('Error loading files:', error);
     }
 }
 
-async function loadVideos() {
-    const videoList = document.getElementById('videoList');
+function appendFileToList(listElement, file) {
+    const li = document.createElement('li');
+    li.className = 'video-item';
 
-    try {
-        const response = await fetch('/videos');
+    const link = document.createElement('a');
+    link.href = `/download/${encodeURIComponent(file)}`;
+    link.innerText = file;
+    link.target = '_blank';
 
-        if (response.status === 401) {
-            showLoginOverlay();
-            return;
-        }
-
-        const videos = await response.json();
-
-        videoList.innerHTML = '';
-        videos.forEach(video => {
-            const li = document.createElement('li');
-            li.className = 'video-item';
-
-            const link = document.createElement('a');
-            link.href = `/download/${video}`;
-            link.innerText = video;
-            link.target = '_blank';
-
-            li.appendChild(link);
-            videoList.appendChild(li);
-        });
-    } catch (error) {
-        console.error('Error loading videos:', error);
-    }
+    li.appendChild(link);
+    listElement.appendChild(li);
 }
 
 // Initial load
-checkAuth();
+loadFiles();
